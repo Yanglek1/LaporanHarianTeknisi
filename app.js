@@ -404,11 +404,11 @@ function wireLogin() {
     setTimeout(() => {
       const isAdmin = user.toLowerCase().includes('admin');
       DB.set('session', {
-        name: isAdmin ? 'Admin WHUSNET' : 'Rizky Ramadhan',
+        name: isAdmin ? 'Admin WHUSNET' : 'Sandy Yuga Pratama',
         role: isAdmin ? 'admin' : 'teknisi',
         technicianId: 'TCH-002',
         phone: user,
-        region: 'Cimahi & Sekitarnya',
+        region: 'Pacitan & Sekitarnya',
         remember,
         loginAt: Date.now(),
       });
@@ -1434,7 +1434,7 @@ function wireAdmin() {
 /* ---------------------------------------------------------------------- */
 /* SCREEN: Tiket — teknisi bisa membuat tiket kendala/bantuan sendiri     */
 /* ---------------------------------------------------------------------- */
-const TICKET_CATEGORIES = ['Gangguan Jaringan', 'Perangkat Rusak', 'PSB Bermasalah', 'Permintaan Alat/Material', 'Lainnya'];
+const TICKET_CATEGORIES = ['Gangguan Jaringan', 'Perangkat Rusak', 'PSB', 'Permintaan Alat/Material', 'Lainnya'];
 const TICKET_PRIORITIES = ['Rendah', 'Sedang', 'Tinggi'];
 const TICKET_STATUS_META = {
   baru: { label: 'Baru', cls: 'pending' },
