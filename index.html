@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>WhusNet FieldOps</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="description" content="Aplikasi teknisi lapangan WhusNet – offline-first PWA">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
+<!-- Tailwind + Alpine via CDN (offline OK kalau sudah di-cache SW) -->
+<script defer src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.3/dist/cdn.min.js"></script>
+<script src="https://unpkg.com/idb@7/build/idb.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  /* Custom scrollbar & focus */
+  ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
+  .btn{@apply px-4 py-2 rounded-xl font-medium transition}
+  .input{@apply w-full border border-slate-300 dark:border-slate-600 rounded-xl px-4 py-2 outline-none focus:ring-2 focus:ring-sky-500}
+  .card{@apply bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700}
+  .badge{@apply px-2 py-0.5 rounded-full text-xs font-semibold}
+</style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen" x-data="app()" x-init="init()">
+
+<!-- ===== SERVICE WORKER REG ===== -->
+<script>
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(console.error);
+}
+</script>
+
+<!-- ===== HEADER ===== -->
+<header class="sticky top-0 z-30 bg-white/80 dark:bg-slate-950/80 backdrop-blur-sm border-b border-slate-200 dark:border-slate-800">
+  <div class="max-w-xl mx-auto px-4 py-3 flex items-center justify-between">
+    <h1 class="font-bold text-xl text-sky-600 dark:text-sky-400">WhusNet FieldOps</h1>
+    <button @click="toggleTheme" class="p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800" aria-label="Toggle theme">
+      <span x-show="dark" class="text-2xl">☀️</span><span x-show="!dark" class="text-2xl">🌙</span>
+    </button>
+  </div>
+</header>
+
+<!-- ===== MAIN ===== -->
+<main class="max-w-xl mx-auto px-4 py-4 pb-24 space-y-4">
+
+  <!-- STATS ROW -->
+  <div class="grid grid-cols-3 gap-3">
+    <div class="card p-4 text-center" x-data="{c:0}" x-init="c=tickets.filter(t=>t.status=='assigned').length">
+      <div class="text-3xl font-bold text-sky-600" x-text="c"></div>
+      <div class="text-xs text-slate-500">Ditugaskan</div>
+    </div>
+    <div class="card p-4 text-center" x-data="{c:0}" x-init="c=tickets.filter(t=>t.status=='arrived').length">
+      <div class="text-3xl font-bold text-amber-600" x-text="c"></div>
+      <div class="text-xs text-slate-500">Di Lokasi</div>
+    </div>
+    <div class="card p-4 text-center" x-data="{c:0}" x-init="c=tickets.filter(t=>t.status=='done').length">
+      <div class="text-3xl font-bold text-emerald-600" x-text="c"></div>
+      <div class="text-xs text-slate-500">Selesai</div>
+    </div>
+  </div>
+
+  <!-- FILTER TABS -->
+  <div class="flex gap-2 overflow-x-auto pb-2" role="tablist">
+    <template x-for="f in filters" :key="f">
+      <button :class="['badge', tab==f?'bg-sky-600 text-white':'bg-slate-200 dark:bg-slate-700', 'whitespace-nowrap']"
+              @click="tab=f" :aria-selected="tab==f" role="tab">
+        <span x-text="f"></span>
+      </button>
+    </template>
+  </div>
+
+  <!-- TICKET LIST -->
+  <template x-for="t in filteredTickets" :key="t.id">
+    <article class="card p-4 space-y-3" :class="{'ring-2 ring-sky-500': expanded==t.id}">
+      <div class="flex items-start justify-between gap-2">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="badge" :class="statusColor(t.status)" x-text="statusLabel(t.status)"></span>
+            <span class="text-sm text-slate-500" x-text="t.id"></span>
+          </div>
+          <h3 class="font-semibold mt-1 truncate" x-text="t.pelanggan"></h3>
+          <p class="text-sm text-slate-500 truncate" x-text="t.alamat"></p>
+          <p class="text-xs text-slate-400" x-text="t.keluhan"></p>
+        </div>
+        <button @click="expanded = expanded==t.id?null:t.id" class="p-1 text-slate-400 hover:text-sky-600" aria-label="Detail">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </button>
+      </div>
+
+      <!-- EXPANDED DETAIL -->
+      <div x-show="expanded==t.id" x-transition class="space-y-3 border-t border-slate-200 dark:border-slate-700 pt-3">
+        <div class="grid grid-cols-2 gap-3 text-sm">
+          <div><span class="text-slate-500">ODP:</span> <span class="font-mono" x-text="t.odp"></span></div>
+          <div><span class="text-slate-500">Port:</span> <span class="font-mono" x-text="t.port"></span></div>
+          <div><span class="text-slate-500">ONT SN:</span> <span class="font-mono" x-text="t.ontSn"></span></div>
+          <div><span class="text-slate-500">Paket:</span> <span x-text="t.paket"></span></div>
+        </div>
+
+        <!-- FOTO SEBELUM/SESUDAH -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Foto Sebelum</label>
+            <input type="file" accept="image/*" capture="environment" class="input text-xs" @change="handlePhoto(t.id,'before',$event)">
+            <div class="mt-1" x-show="t.photos.before">
+              <img :src="t.photos.before" class="w-full h-32 object-cover rounded-xl border border-slate-200 dark:border-slate-700" @click="previewPhoto(t.photos.before)">
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs text-slate-500 mb-1">Foto Sesudah</label>
+            <input type="file" accept="image/*" capture="environment" class="input text-xs" @change="handlePhoto(t.id,'after',$event)">
+            <div class="mt-1" x-show="t.photos.after">
+              <img :src="t.photos.after" class="w-full h-32 object-cover rounded-xl border border-slate-200 dark:border-slate-700" @click="previewPhoto(t.photos.after)">
+            </div>
+          </div>
+        </div>
+
+        <!-- SPEED TEST & SINYAL -->
+        <div class="grid grid-cols-2 gap-3">
+          <button @click="runSpeedTest(t.id)" class="btn bg-sky-100 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300" :disabled="t.syncing">
+            <span x-show="!t.speed">🚀 Tes Kecepatan</span>
+            <span x-show="t.speed" x-text="'⬇ '+t.speed.down+' / ⬆ '+t.speed.up+' Mbps'"></span>
+          </button>
+          <button @click="measureSignal(t.id)" class="btn bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300" :disabled="t.syncing">
+            <span x-show="!t.signal">📶 Ukur Sinyal</span>
+            <span x-show="t.signal" x-text="'RSRP '+t.signal.rsrp+' dBm'"></span>
+          </button>
+        </div>
+
+        <!-- CATATAN TEKNISI -->
+        <textarea class="input h-20 text-sm" placeholder="Catatan teknisi..." x-model="t.notes"></textarea>
+
+        <!-- ACTION BUTTONS -->
+        <div class="flex gap-2 pt-2">
+          <template x-if="t.status=='assigned'">
+            <button @click="updateStatus(t.id,'arrived')" class="btn flex-1 bg-amber-600 text-white">📍 Datang di Lokasi</button>
+          </template>
+          <template x-if="t.status=='arrived'">
+            <button @click="updateStatus(t.id,'done')" class="btn flex-1 bg-emerald-600 text-white" :disabled="!t.photos.after">✅ Selesai & Tutup</button>
+            <button @click="updateStatus(t.id,'assigned')" class="btn bg-slate-200 dark:bg-slate-700">↩ Kembalikan</button>
+          </template>
+          <template x-if="t.status=='done'">
+            <button @click="generatePDF(t)" class="btn flex-1 bg-sky-600 text-white">📄 Buat Laporan PDF</button>
+            <button @click="shareReport(t)" class="btn flex-1 bg-violet-600 text-white">📤 Kirim ke Koordinator</button>
+          </template>
+        </div>
+
+        <p class="text-xs text-slate-400 text-right" x-text="'Update: '+formatTime(t.updated)"></p>
+      </div>
+    </article>
+  </template>
+
+  <div x-show="filteredTickets.length===0" class="text-center py-12 text-slate-500">
+    <svg class="w-16 h-16 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path></svg>
+    <p>Tidak ada tiket di tab ini.</p>
+  </div>
+
+</main>
+
+<!-- ===== FAB SYNC ===== -->
+<button @click="syncAll" class="fixed bottom-6 right-6 btn bg-sky-600 text-white shadow-xl rounded-full px-6 flex items-center gap-2" :class="{'animate-pulse': syncing}" aria-label="Sinkronisasi">
+  <svg class="w-5 h-5" x-show="!syncing" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+  <svg class="w-5 h-5 animate-spin" x-show="syncing" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+  <span x-show="!syncing">Sync</span><span x-show="syncing">Menyinkron...</span>
+</button>
+
+<!-- ===== PHOTO PREVIEW MODAL ===== -->
+<div x-show="previewSrc" x-transition:enter="transition-opacity" x-transition:leave="transition-opacity" class="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" @click.self="previewSrc=null">
+  <img :src="previewSrc" class="max-h-[80vh] max-w-[90vw] rounded-xl shadow-2xl">
+  <button @click="previewSrc=null" class="absolute top-4 right-4 text-white/80 hover:text-white text-3xl leading-none">&times;</button>
+</div>
+
+<!-- ===== TOAST ===== -->
+<div x-show="toast" x-transition class="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-6 py-3 rounded-xl shadow-xl text-sm" role="alert" x-text="toast"></div>
+
+<!-- ===== ALPINE APP ===== -->
+<script>
+function app() {
+  return {
+    // STATE
+    tickets: [],
+    tab: 'Semua',
+    filters: ['Semua','Ditugaskan','Di Lokasi','Selesai'],
+    expanded: null,
+    previewSrc: null,
+    toast: '',
+    syncing: false,
+    dark: false,
+    db: null,
+
+    // INIT
+    async init() {
+      this.dark = localStorage.getItem('theme')==='dark' || (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.classList.toggle('dark', this.dark);
+      this.db = await idb.openDB('whusnet-fieldops', 1, {
+        upgrade(db) {
+          db.createObjectStore('tickets', {keyPath: 'id'});
+          db.createObjectStore('outbox', {keyPath: 'id', autoIncrement: true});
+        }
+      });
+      await this.loadTickets();
+      // Demo data kalau kosong
+      if(this.tickets.length===0) await this.seedDemo();
+      // Register periodic sync (background)
+      if('serviceWorker' in navigator && 'periodicSync' in registration) {
+        try { await navigator.serviceWorker.ready; navigator.serviceWorker.register('sw.js'); }
+        catch(e) { console.log('Periodic sync n/a', e); }
+      }
+    },
+
+    // THEME
+    toggleTheme() {
+      this.dark = !this.dark;
+      localStorage.setItem('theme', this.dark?'dark':'light');
+      document.documentElement.classList.toggle('dark', this.dark);
+    },
+
+    // INDEXEDDB HELPERS
+    async loadTickets() {
+      this.tickets = await this.db.getAll('tickets');
+      this.tickets.sort((a,b)=>b.updated - a.updated);
+    },
+    async saveTicket(t) {
+      t.updated = Date.now();
+      await this.db.put('tickets', t);
+      await this.loadTickets();
+      this.showToast('Tiket tersimpan lokal');
+    },
+    async addOutbox(action, payload) {
+      await this.db.add('outbox', {action, payload, ts: Date.now()});
+    },
+
+    // DEMO DATA
+    async seedDemo() {
+      const demo = [
+        {id:'WN-20261019-001', pelanggan:'Budi Santoso', alamat:'Jl. Merdeka 12, RT 03/RW 02, Kel. Sukamaju', keluhan:'Internet lambat sejak seminggu', odp:'ODP-JKT-045', port:'P12', ontSn:'SN123456789', paket:'100 Mbps', status:'assigned', photos:{}, notes:'', created:Date.now()-864e5, updated:Date.now()-864e5},
+        {id:'WN-20261019-002', pelanggan:'Siti Rahma', alamat:'Jl. Sudirman 45, Blok C No. 7', keluhan:'Total mati, lampu LOS nyala merah', odp:'ODP-JKT-045', port:'P08', ontSn:'SN987654321', paket:'50 Mbps', status:'arrived', photos:{before:'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMzAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZTJlOGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiM5NDA0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkZvdG8gU2VidWx1bTwvdGV4dD48L3N2Zz4='}, notes:'Sudah cek kabel drop core putus', created:Date.now()-432e5, updated:Date.now()-432e5},
+        {id:'WN-20261019-003', pelanggan:'PT. Maju Jaya', alamat:'Gedung Cyber Lt.3, Jl. Gatot Subroto', keluhan:'Butuh tambah port untuk server baru', odp:'ODP-JKT-088', port:'P01', ontSn:'SN112233445', paket:'300 Mbps Dedicated', status:'done', photos:{before:'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMzAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZTJlOGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiM5NDA0MCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkZvdG8gU2VidWx1bTwvdGV4dD48L3N2Zz4=', after:'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iMzAwIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZDVmM2U0Ii8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtc2l6ZT0iMjQiIGZpbGw9IiMxNjY1MzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIj5Gb3RvIFNlbGVzYWk8L3RleHQ+PC9zdmc+'}, notes:'Port P01 aktif, ONT bridge mode', speed:{down:312, up:310}, signal:{rsrp:-12}, created:Date.now()-1728e5, updated:Date.now()-1728e5}
+      ];
+      for(const t of demo) await this.db.put('tickets', t);
+      await this.loadTickets();
+    },
+
+    // COMPUTED
+    get filteredTickets() {
+      if(this.tab==='Semua') return this.tickets;
+      const map = {'Ditugaskan':'assigned','Di Lokasi':'arrived','Selesai':'done'};
+      return this.tickets.filter(t=>t.status===map[this.tab]);
+    },
+
+    // STATUS HELPERS
+    statusLabel(s) { return {'assigned':'Ditugaskan','arrived':'Di Lokasi','done':'Selesai'}[s]||s; },
+    statusColor(s) { return {'assigned':'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300','arrived':'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300','done':'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}[s]; },
+
+    // ACTIONS
+    async updateStatus(id, newStatus) {
+      const t = this.tickets.find(x=>x.id===id); if(!t) return;
+      if(newStatus==='arrived') {
+        t.arrival = {lat:0, lng:0, ts:Date.now()}; // TODO: Geolocation API
+        navigator.geolocation.getCurrentPosition(p=>{t.arrival.lat=p.coords.latitude; t.arrival.lng=p.coords.longitude; this.saveTicket(t);},()=>this.saveTicket(t), {enableHighAccuracy:true, timeout:10000});
+      }
+      if(newStatus==='done' && !t.photos.after) { this.showToast('Wajib foto sesudah!'); return; }
+      t.status = newStatus;
+      await this.saveTicket(t);
+      await this.addOutbox('status', {id, status:newStatus});
+      this.showToast(`Status → ${this.statusLabel(newStatus)}`);
+    },
+
+    // PHOTO HANDLING (compress to max 800px, 0.7 quality)
+    handlePhoto(id, type, e) {
+      const file = e.target.files[0]; if(!file) return;
+      const t = this.tickets.find(x=>x.id===id); if(!t) return;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const max = 800; let {width, height} = img;
+        if(width>height){ if(width>max){height*=max/width; width=max; } }
+        else { if(height>max){width*=max/height; height=max; } }
+        canvas.width=width; canvas.height=height;
+        canvas.getContext('2d').drawImage(img,0,0,width,height);
+        t.photos[type] = canvas.toDataURL('image/jpeg',0.7);
+        this.saveTicket(t);
+        URL.revokeObjectURL(img.src);
+      };
+      img.src = URL.createObjectURL(file);
+    },
+    previewPhoto(src) { this.previewSrc = src; },
+
+    // SIMULASI SPEED TEST & SINYAL (ganti dengan API/CLI nyata nanti)
+    async runSpeedTest(id) {
+      const t = this.tickets.find(x=>x.id===id); if(!t) return;
+      this.showToast('Menjalankan speed test...');
+      await new Promise(r=>setTimeout(r,2000));
+      t.speed = { down: (Math.random()*100+50).toFixed(1), up: (Math.random()*50+20).toFixed(1) };
+      await this.saveTicket(t);
+      this.showToast(`Speedtest: ⬇${t.speed.down} ⬆${t.speed.up} Mbps`);
+    },
+    async measureSignal(id) {
+      const t = this.tickets.find(x=>x.id===id); if(!t) return;
+      this.showToast('Mengukur sinyal...');
+      await new Promise(r=>setTimeout(r,1500));
+      t.signal = { rsrp: -(Math.random()*30+80).toFixed(1), snr: (Math.random()*10+5).toFixed(1) };
+      await this.saveTicket(t);
+      this.showToast(`RSRP ${t.signal.rsrp} dBm, SNR ${t.signal.snr} dB`);
+    },
+
+    // PDF REPORT (pakai jsPDF + html2canvas)
+    async generatePDF(t) {
+      this.showToast('Membuat PDF...');
+      const {jsPDF} = window.jspdf;
+      const pdf = new jsPDF({unit:'pt', format:'a4'});
+      const pageW = pdf.internal.pageSize.getWidth();
+      let y = 40;
+
+      pdf.setFontSize(20); pdf.setTextColor('#0ea5e9'); pdf.text('Laporan Teknisi WhusNet', pageW/2, y, {align:'center'});
+      y+=30;
+      pdf.setDrawColor('#0ea5e9'); pdf.setLineWidth(1); pdf.line(40, y, pageW-40, y); y+=20;
+
+      const fields = [
+        ['ID Tiket', t.id],
+        ['Pelanggan', t.pelanggan],
+        ['Alamat', t.alamat],
+        ['Keluhan', t.keluhan],
+        ['ODP / Port', `${t.odp} / ${t.port}`],
+        ['ONT SN', t.ontSn],
+        ['Paket', t.paket],
+        ['Status', this.statusLabel(t.status)],
+        ['Catatan', t.notes || '-'],
+      ];
+      if(t.speed) fields.push(['Speed Test', `⬇${t.speed.down} Mbps / ⬆${t.speed.up} Mbps`]);
+      if(t.signal) fields.push(['Sinyal', `RSRP ${t.signal.rsrp} dBm, SNR ${t.signal.snr} dB`]);
+      if(t.arrival) fields.push(['Lokasi Teknisi', `Lat:${t.arrival.lat.toFixed(6)}, Lng:${t.arrival.lng.toFixed(6)}`]);
+
+      pdf.setFontSize(10);
+      fields.forEach(([k,v])=>{
+        pdf.setFont(undefined,'bold'); pdf.text(k+':', 40, y);
+        pdf.setFont(undefined,'normal'); pdf.text(String(v), 160, y, {maxWidth: pageW-200});
+        y+=18;
+      });
+
+      // FOTO
+      if(t.photos.before || t.photos.after) {
+        y+=10;
+        pdf.setFontSize(12); pdf.setFont(undefined,'bold'); pdf.text('Dokumentasi Foto', 40, y); y+=16;
+        for(const [label, src] of Object.entries(t.photos)) {
+          if(!src) continue;
+          try {
+            const canvas = await html2canvas(document.createElement('img'), {imageSrc: src, scale:1, logging:false, useCORS:true});
+            const imgData = canvas.toDataURL('image/jpeg',0.8);
+            const iw = pageW-80; const ih = canvas.height * iw / canvas.width;
+            if(y+ih > pdf.internal.pageSize.getHeight()-40) { pdf.addPage(); y=40; }
+            pdf.addImage(imgData, 'JPEG', 40, y, iw, ih);
+            pdf.setFontSize(8); pdf.setTextColor('#666'); pdf.text(label.toUpperCase(), 40, y+ih+8);
+            y += ih + 20;
+          } catch(e) { console.error(e); }
+        }
+      }
+
+      // FOOTER
+      pdf.setFontSize(8); pdf.setTextColor('#999');
+      pdf.text(`Dibuat: ${new Date().toLocaleString('id-ID')} | WhusNet FieldOps v1.0`, pageW/2, pdf.internal.pageSize.getHeight()-30, {align:'center'});
+
+      const blob = pdf.output('blob');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download=`Laporan-${t.id}.pdf`; a.click();
+      URL.revokeObjectURL(url);
+      this.showToast('PDF terunduh');
+    },
+
+    // SHARE (Web Share API)
+    async shareReport(t) {
+      if(!navigator.share) { this.showToast('Web Share tidak didukung browser ini'); return; }
+      try {
+        await navigator.share({
+          title: `Laporan Tiket ${t.id}`,
+          text: `Pelanggan: ${t.pelanggan}\nStatus: ${this.statusLabel(t.status)}\nCatatan: ${t.notes}`,
+          url: window.location.href
+        });
+        this.showToast('Berbagi berhasil');
+      } catch(e) { if(e.name!=='AbortError') console.error(e); }
+    },
+
+    // SYNC ALL (kirim ke backend nyata)
+    async syncAll() {
+      if(this.syncing) return;
+      this.syncing = true;
+      this.showToast('Menyinkronkan ke server...');
+      // Simulasi delay jaringan
+      await new Promise(r=>setTimeout(r,2000));
+      // TODO: POST ke API WhusNet (tickets, photos, outbox)
+      // const outbox = await this.db.getAll('outbox');
+      // await fetch('/api/sync', {method:'POST', body:JSON.stringify({tickets:this.tickets, outbox})});
+      // await this.db.clear('outbox');
+      this.syncing = false;
+      this.showToast('Sinkronisasi selesai (simulasi)');
+    },
+
+    // UTIL
+    formatTime(ts) { return new Date(ts).toLocaleString('id-ID', {hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'}); },
+    showToast(msg) { this.toast=msg; setTimeout(()=>this.toast='', 3000); }
+  }
+}
+</script>
+
+<!-- ===== MANIFEST (inline untuk kemudahan single-file) ===== -->
+<script>
+const manifest = {
+  name: "WhusNet FieldOps",
+  short_name: "FieldOps",
+  start_url: ".",
+  display: "standalone",
+  background_color: "#f8fafc",
+  theme_color: "#0f172a",
+  icons: [
+    {src:"icon-192.png", sizes:"192x192", type:"image/png", purpose:"any maskable"},
+    {src:"icon-512.png", sizes:"512x512", type:"image/png", purpose:"any maskable"}
+  ],
+  shortcuts: [
+    {name:"Tiket Baru", url:"/?new=1", description:"Buat tiket manual"}
+  ]
+};
+const blob = new Blob([JSON.stringify(manifest)], {type:'application/manifest+json'});
+const url = URL.createObjectURL(blob);
+document.querySelector('link[rel="manifest"]').href = url;
+</script>
+
+</body>
+</html>
